@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+tests/
+docs/
+.git/
+.gitignore
+*.md
+signal_cache.json
+signals.json
+signals.csv
+data/

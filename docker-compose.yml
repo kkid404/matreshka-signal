@@ -1,13 +1,95 @@
 version: "3.8"
 
 services:
-  scanner:
+  market-data:
     build: .
-    container_name: matryoshka-scanner
+    container_name: matryoshka-market-data
     restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - PYTHONUNBUFFERED=1
+      - MARKET_DATA_SERVICE_HOST=0.0.0.0
+      - MARKET_DATA_SERVICE_PORT=8083
+      - MARKET_DATA_CACHE_TTL_SECONDS=120
+      - MARKET_DATA_MIN_REQUEST_INTERVAL_MS=200
+    entrypoint: ["python", "src/services/market_data_service.py"]
+
+  notification-service:
+    build: .
+    container_name: matryoshka-notification-service
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - PYTHONUNBUFFERED=1
+      - NOTIFICATION_SERVICE_HOST=0.0.0.0
+      - NOTIFICATION_SERVICE_PORT=8081
+    entrypoint: ["python", "src/services/notification_service.py"]
+
+  signal-engine:
+    build: .
+    container_name: matryoshka-signal-engine
+    restart: unless-stopped
+    depends_on:
+      - market-data
+      - notification-service
+      - analytics
     env_file:
       - .env
     volumes:
       - ./data:/app/data
     environment:
       - PYTHONUNBUFFERED=1
+      - SIGNAL_ENGINE_SERVICE_HOST=0.0.0.0
+      - SIGNAL_ENGINE_SERVICE_PORT=8082
+      - MARKET_DATA_SERVICE_URL=http://market-data:8083
+      - NOTIFICATION_SERVICE_URL=http://notification-service:8081
+      - ANALYTICS_SERVICE_URL=http://analytics:8084
+    entrypoint: ["python", "src/services/signal_engine_service.py"]
+
+  analytics:
+    build: .
+    container_name: matryoshka-analytics-service
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - PYTHONUNBUFFERED=1
+      - ANALYTICS_SERVICE_HOST=0.0.0.0
+      - ANALYTICS_SERVICE_PORT=8084
+    entrypoint: ["python", "src/services/analytics_service.py"]
+
+  scanner:
+    build: .
+    container_name: matryoshka-scanner
+    restart: unless-stopped
+    depends_on:
+      - notification-service
+      - signal-engine
+    env_file:
+      - .env
+    volumes:
+      - ./data:/app/data
+    environment:
+      - PYTHONUNBUFFERED=1
+      - NOTIFICATION_SERVICE_URL=http://notification-service:8081
+      - SIGNAL_ENGINE_SERVICE_URL=http://signal-engine:8082
+    command: ["--daemon"]
+
+  control-bot:
+    build: .
+    container_name: matryoshka-control-bot
+    restart: unless-stopped
+    depends_on:
+      - notification-service
+      - signal-engine
+    env_file:
+      - .env
+    volumes:
+      - ./data:/app/data
+    environment:
+      - PYTHONUNBUFFERED=1
+      - NOTIFICATION_SERVICE_URL=http://notification-service:8081
+      - SIGNAL_ENGINE_SERVICE_URL=http://signal-engine:8082
+    entrypoint: ["python", "src/services/control_bot_service.py"]

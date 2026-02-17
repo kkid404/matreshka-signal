@@ -13,20 +13,13 @@ import logging.handlers
 import os
 import sys
 import time
-from datetime import datetime, timezone
 from typing import List
 
-from dotenv import load_dotenv
-
-from config import ScannerConfig, TelegramConfig
-from data_fetcher import DataFetcher
-from signal_detector import scan_symbol
-from probability import calculate_probability
-from levels import get_manual_levels, detect_swing_highs_lows, cluster_levels
-from output import print_signal_card, print_signals_table, save_signals_json, save_signals_csv
-from cache import SignalCache
-from models import SignalCard
-from telegram_notifier import TelegramNotifier
+from application.use_cases.configuration import build_scanner_config
+from core.config import ScannerConfig
+from core.output import print_signal_card, print_signals_table, save_signals_json, save_signals_csv
+from infrastructure.notification_client import NotificationClient
+from infrastructure.signal_engine_client import SignalEngineClient
 
 LOG_FORMAT = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
 logger = logging.getLogger("matryoshka")
@@ -34,107 +27,7 @@ logger = logging.getLogger("matryoshka")
 
 def build_config() -> ScannerConfig:
     """Build default config.  Edit this function or load from YAML/JSON later."""
-    load_dotenv()
-
-    tg_cfg = TelegramConfig(
-        enabled=os.getenv("TELEGRAM_ENABLED", "false").lower() in ("true", "1", "yes"),
-        bot_token=os.getenv("TELEGRAM_BOT_TOKEN", ""),
-        chat_id=os.getenv("TELEGRAM_CHAT_ID", ""),
-    )
-
-    return ScannerConfig(telegram=tg_cfg)
-
-
-def resolve_symbols(cfg: ScannerConfig, fetcher: DataFetcher) -> List[str]:
-    """Resolve the list of symbols to scan based on symbols_mode."""
-    flt = cfg.symbol_filter
-
-    if cfg.symbols_mode == "manual":
-        return cfg.symbols
-
-    if cfg.symbols_mode == "top_n":
-        return fetcher.get_top_usdt_perpetuals(
-            top_n=cfg.top_n,
-            min_volume_24h=flt.min_volume_24h,
-            exclude=flt.exclude,
-        )
-
-    # "all"
-    return fetcher.get_all_usdt_perpetuals(
-        min_volume_24h=flt.min_volume_24h,
-        exclude=flt.exclude,
-    )
-
-
-_SYMBOL_THROTTLE = 0.35  # seconds between symbols to avoid rate limits
-
-
-def run_scan(
-    cfg: ScannerConfig,
-    fetcher: DataFetcher,
-    cache: SignalCache,
-    symbols: List[str],
-) -> List[SignalCard]:
-    """Execute one full scan across all configured symbols."""
-    signals: List[SignalCard] = []
-    total = len(symbols)
-
-    for i, symbol in enumerate(symbols, 1):
-        if i % 50 == 0 or i == 1:
-            logger.info("Progress: %d/%d symbols …", i, total)
-        logger.info("Scanning %s …", symbol)
-        try:
-            # Fetch D1 candles for context
-            d1_candles = fetcher.fetch_candles(
-                symbol, cfg.context.timeframe, limit=cfg.context.lookback_bars,
-            )
-            # Fetch H4 candles for setup + probability backtest
-            h4_limit = max(cfg.setup.lookback_bars, cfg.probability.lookback_bars)
-            h4_candles = fetcher.fetch_candles(
-                symbol, cfg.setup.timeframe, limit=h4_limit,
-            )
-
-            if len(h4_candles) < 30:
-                logger.warning("%s: not enough H4 data (%d candles)", symbol, len(h4_candles))
-                continue
-
-            # Detect signal
-            card = scan_symbol(symbol, d1_candles, h4_candles, cfg)
-            if card is None:
-                logger.info("%s: no signal", symbol)
-                continue
-
-            # Deduplicate
-            sig_time_iso = card.signal_candle_time.isoformat()
-            if not cache.is_new(symbol, sig_time_iso, card.direction.value):
-                logger.info("%s: signal already emitted, skipping", symbol)
-                continue
-
-            # Probability
-            levels = _get_levels(symbol, h4_candles, cfg)
-            prob = calculate_probability(symbol, h4_candles, d1_candles, levels, cfg)
-            card.probability_percent = prob.probability_pct
-            card.sample_size_n = prob.total
-            card.low_sample = prob.low_sample
-
-            # Output card
-            print_signal_card(card)
-            signals.append(card)
-            cache.mark(symbol, sig_time_iso, card.direction.value)
-
-        except Exception:
-            logger.exception("Error scanning %s", symbol)
-
-        time.sleep(_SYMBOL_THROTTLE)
-
-    return signals
-
-
-def _get_levels(symbol: str, h4_candles, cfg: ScannerConfig) -> List[float]:
-    if cfg.levels_mode == "manual":
-        return get_manual_levels(cfg.levels_manual, symbol)
-    raw = detect_swing_highs_lows(h4_candles, order=5)
-    return cluster_levels(raw, tolerance_pct=0.5)
+    return build_scanner_config()
 
 
 def _save_chat_id_to_env(chat_id: str) -> None:
@@ -167,6 +60,8 @@ def main() -> None:
     parser.add_argument("--test-telegram", action="store_true", help="Send test message and exit")
     parser.add_argument("--setup-telegram", action="store_true", help="Auto-detect chat_id from /start")
     parser.add_argument("--log-file", type=str, default="", help="Save logs to file in data/ (e.g. scanner.log)")
+    parser.add_argument("--replay-symbol", type=str, default="", help="Replay one symbol history and send one latest signal per strategy")
+    parser.add_argument("--replay-lookback", type=int, default=1200, help="H4 candles to scan in replay mode")
     args = parser.parse_args()
 
     cfg = build_config()
@@ -175,23 +70,29 @@ def main() -> None:
 
     # --- logging setup ---
     log_level = logging.DEBUG if args.debug else logging.INFO
-    handlers: list[logging.Handler] = [logging.StreamHandler()]
+    handlers: list[logging.Handler] = [logging.StreamHandler(stream=sys.stdout)]
     if args.log_file:
         log_path = os.path.join(data_dir, args.log_file)
         handlers.append(logging.handlers.RotatingFileHandler(
             log_path, maxBytes=5_000_000, backupCount=3, encoding="utf-8",
         ))
     logging.basicConfig(level=log_level, format=LOG_FORMAT, handlers=handlers)
+    # Keep third-party HTTP debug noise out of the main log.
+    logging.getLogger("ccxt").setLevel(logging.WARNING)
+    logging.getLogger("urllib3").setLevel(logging.WARNING)
     cfg.output_json = os.path.join(data_dir, cfg.output_json)
     cfg.output_csv = os.path.join(data_dir, cfg.output_csv)
 
-    fetcher = DataFetcher()  # no API key needed for public endpoints
-    cache = SignalCache(os.path.join(data_dir, "signal_cache.json"))
-    tg = TelegramNotifier(
-        bot_token=cfg.telegram.bot_token,
-        chat_id=cfg.telegram.chat_id,
+    notification_service_url = os.getenv("NOTIFICATION_SERVICE_URL", "http://127.0.0.1:8081")
+    signal_engine_service_url = os.getenv("SIGNAL_ENGINE_SERVICE_URL", "http://127.0.0.1:8082")
+
+    notifier = NotificationClient(
+        base_url=notification_service_url,
+        default_bot_token=cfg.telegram.bot_token,
+        default_chat_id=cfg.telegram.chat_id,
         enabled=cfg.telegram.enabled,
     )
+    signal_engine = SignalEngineClient(base_url=signal_engine_service_url)
 
     logger.info("=== Matryoshka Scanner started ===")
     logger.info("Symbols mode: %s", cfg.symbols_mode)
@@ -207,39 +108,64 @@ def main() -> None:
             return
         print("\nНапиши /start твоему боту в Telegram, затем нажми Enter здесь...")
         input()
-        chat_id = tg.fetch_chat_id()
+        chat_id = notifier.fetch_chat_id()
         if not chat_id:
-            logger.error("Не нашёл /start сообщение. Убедись что написал /start боту.")
+            logger.error("Не нашёл /start сообщение (через notification-service). Убедись что написал /start боту.")
             return
         # Save to .env
         _save_chat_id_to_env(chat_id)
-        tg.chat_id = chat_id
-        tg.send_text("✅ Matryoshka Scanner подключён! Сигналы будут приходить сюда.")
+        notifier.default_chat_id = chat_id
+        notifier.send_text("✅ Matryoshka Scanner подключён! Сигналы будут приходить сюда.")
         logger.info("✅ chat_id=%s сохранён в .env. Тестовое сообщение отправлено!", chat_id)
         return
 
     if args.test_telegram:
-        ok = tg.send_text("✅ Matryoshka Scanner — Telegram работает!")
+        ok = notifier.send_text("✅ Matryoshka Scanner — Telegram работает!")
         if ok:
             logger.info("Test message sent successfully!")
         else:
-            logger.error("Failed to send test message. Check bot_token and chat_id in .env")
+            logger.error("Failed to send test message via notification-service. Check service URL, bot_token and chat_id")
+        return
+
+    if args.replay_symbol:
+        symbol = args.replay_symbol.upper().replace("/", "").replace(":USDT", "")
+        logger.info("Replay mode: symbol=%s, lookback=%d H4", symbol, args.replay_lookback)
+        cards = signal_engine.replay_run(symbol=symbol, lookback=args.replay_lookback)
+
+        if not cards:
+            logger.info("%s: no historical signals found for selected strategies", symbol)
+            if notifier.enabled:
+                notifier.send_text(f"ℹ️ {symbol}: в истории не найдено сигналов по активным стратегиям.")
+            return
+
+        print_signals_table(cards)
+        logger.info("Replay found %d strategy signal(s)", len(cards))
+
+        if notifier.enabled:
+            notifier.send_text(f"📚 Replay {symbol}: отправляю по 1 последнему сигналу на каждую стратегию ({len(cards)} шт.)")
+            sent = 0
+            for card in cards:
+                if notifier.send_signal(card):
+                    sent += 1
+                time.sleep(0.25)
+            logger.info("Replay: sent %d/%d cards to Telegram", sent, len(cards))
+        else:
+            logger.warning("Replay complete, but Telegram is disabled")
         return
 
     if args.daemon:
         while True:
             try:
                 t0 = time.time()
-                symbols = resolve_symbols(cfg, fetcher)
-                logger.info("Scanning %d symbols …", len(symbols))
-                signals = run_scan(cfg, fetcher, cache, symbols)
+                logger.info("Requesting scan from signal-engine-service …")
+                signals = signal_engine.scan_run()
                 if signals:
+                    for card in signals:
+                        print_signal_card(card)
                     print_signals_table(signals)
                     save_signals_json(signals, cfg.output_json)
                     save_signals_csv(signals, cfg.output_csv)
-                    sent = tg.send_signals(signals)
-                    if sent:
-                        logger.info("Sent %d signal(s) to Telegram", sent)
+                    logger.info("Signals delivered via signal.created subscribers")
                 elapsed = time.time() - t0
                 logger.info("Scan completed in %.1f s — %d signal(s)", elapsed, len(signals))
                 sleep_for = max(0, cfg.scan_interval_seconds - elapsed)
@@ -249,16 +175,15 @@ def main() -> None:
                 logger.info("Scanner stopped by user.")
                 break
     else:
-        symbols = resolve_symbols(cfg, fetcher)
-        logger.info("Scanning %d symbols …", len(symbols))
-        signals = run_scan(cfg, fetcher, cache, symbols)
+        logger.info("Requesting single scan from signal-engine-service …")
+        signals = signal_engine.scan_run()
         if signals:
+            for card in signals:
+                print_signal_card(card)
             print_signals_table(signals)
             save_signals_json(signals, cfg.output_json)
             save_signals_csv(signals, cfg.output_csv)
-            sent = tg.send_signals(signals)
-            if sent:
-                logger.info("Sent %d signal(s) to Telegram", sent)
+            logger.info("Signals delivered via signal.created subscribers")
         else:
             logger.info("No signals found.")
 

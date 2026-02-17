@@ -9,7 +9,7 @@ import urllib.error
 import json
 from typing import List, Optional
 
-from models import SignalCard
+from core.models import SignalCard
 
 logger = logging.getLogger(__name__)
 
@@ -83,8 +83,18 @@ class TelegramNotifier:
         direction_emoji = "\U0001f7e2" if card.direction.value == "LONG" else "\U0001f534"
         sample_warning = " \u26a0\ufe0f \u043c\u0430\u043b\u043e \u0434\u0430\u043d\u043d\u044b\u0445" if card.low_sample else ""
 
+        strat_label = {
+            "matryoshka": "\U0001fa86 Matryoshka",
+            "ema_bounce": "\U0001f4c8 EMA Bounce",
+            "breakout": "\U0001f4a5 Breakout",
+            "engulfing": "\U0001f504 Engulfing",
+            "momentum_break": "\u26a1 Momentum Break",
+            "ema_cross": "\u2715 EMA Cross",
+        }.get(card.strategy_name, card.strategy_name)
+
         lines = [
             f"{direction_emoji} <b>{card.symbol}</b> \u2014 <b>{card.direction.value}</b>",
+            f"\U0001f9e9 <b>\u0421\u0442\u0440\u0430\u0442\u0435\u0433\u0438\u044f:</b> {strat_label}",
             "",
             f"\u23f0 <b>\u0422\u0430\u0439\u043c\u0444\u0440\u0435\u0439\u043c:</b> {card.timeframe}",
             f"\U0001f4c5 <b>\u0421\u0438\u0433\u043d\u0430\u043b:</b> {card.signal_candle_time.strftime('%Y-%m-%d %H:%M UTC')}",
@@ -104,10 +114,16 @@ class TelegramNotifier:
                 lines.append(f"  \u2022 {step.tp_rr}R \u2014 \u0437\u0430\u043a\u0440\u044b\u0442\u044c {step.close_pct*100:.0f}%{be_note}")
 
         lines.append("")
-        lines.append(
-            f"\U0001f4c8 <b>\u0412\u0435\u0440\u043e\u044f\u0442\u043d\u043e\u0441\u0442\u044c:</b> {card.probability_percent:.1f}% "
-            f"(N={card.sample_size_n}{sample_warning})"
-        )
+        if card.sample_size_n > 0:
+            lines.append(
+                f"\U0001f4c8 <b>\u0412\u0435\u0440\u043e\u044f\u0442\u043d\u043e\u0441\u0442\u044c:</b> {card.probability_percent:.1f}% "
+                f"(N={card.sample_size_n}{sample_warning})"
+            )
+        else:
+            lines.append(
+                "\U0001f4c8 <b>\u0412\u0435\u0440\u043e\u044f\u0442\u043d\u043e\u0441\u0442\u044c:</b> n/a "
+                "(\u0434\u043b\u044f \u044d\u0442\u043e\u0439 \u0441\u0442\u0440\u0430\u0442\u0435\u0433\u0438\u0438 \u0432 replay \u043d\u0435 \u0441\u0447\u0438\u0442\u0430\u0435\u0442\u0441\u044f)"
+            )
 
         if card.tradingview_link:
             lines.append(f'\n\U0001f517 <a href="{card.tradingview_link}">\u0413\u0440\u0430\u0444\u0438\u043a TradingView</a>')

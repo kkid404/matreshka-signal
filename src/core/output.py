@@ -5,7 +5,6 @@ from __future__ import annotations
 import csv
 import json
 import os
-from datetime import datetime, timezone
 from typing import List
 
 from rich.console import Console
@@ -13,17 +12,12 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
-from models import SignalCard
+from core.models import SignalCard
 
 console = Console()
 
 
-# ---------------------------------------------------------------------------
-# Console (rich)
-# ---------------------------------------------------------------------------
-
 def print_signal_card(card: SignalCard) -> None:
-    """Pretty-print a single signal card to the terminal."""
     dir_color = "green" if card.direction.value == "LONG" else "red"
     sample_note = " ⚠ low sample" if card.low_sample else ""
 
@@ -52,7 +46,6 @@ def print_signal_card(card: SignalCard) -> None:
 
 
 def print_signals_table(cards: List[SignalCard]) -> None:
-    """Print a compact table of all signals."""
     if not cards:
         console.print("[yellow]No signals found.[/yellow]")
         return
@@ -84,20 +77,12 @@ def print_signals_table(cards: List[SignalCard]) -> None:
     console.print(table)
 
 
-# ---------------------------------------------------------------------------
-# JSON
-# ---------------------------------------------------------------------------
-
 def save_signals_json(cards: List[SignalCard], path: str) -> None:
     data = [c.to_dict() for c in cards]
     with open(path, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
     console.print(f"[dim]Saved {len(cards)} signal(s) to {path}[/dim]")
 
-
-# ---------------------------------------------------------------------------
-# CSV
-# ---------------------------------------------------------------------------
 
 _CSV_FIELDS = [
     "symbol", "direction", "timeframe", "signal_candle_time",

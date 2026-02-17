@@ -4,8 +4,7 @@ from __future__ import annotations
 
 import json
 import os
-from datetime import datetime, timezone
-from typing import Dict, Set
+from typing import Set
 
 _CACHE_FILE = "signal_cache.json"
 
@@ -18,10 +17,6 @@ class SignalCache:
         self._seen: Set[str] = set()
         self._load()
 
-    # ------------------------------------------------------------------
-    # Public API
-    # ------------------------------------------------------------------
-
     def is_new(self, symbol: str, signal_time_iso: str, direction: str) -> bool:
         key = self._key(symbol, signal_time_iso, direction)
         return key not in self._seen
@@ -30,10 +25,6 @@ class SignalCache:
         key = self._key(symbol, signal_time_iso, direction)
         self._seen.add(key)
         self._save()
-
-    # ------------------------------------------------------------------
-    # Internal
-    # ------------------------------------------------------------------
 
     @staticmethod
     def _key(symbol: str, signal_time_iso: str, direction: str) -> str:

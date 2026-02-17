@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import List, Optional
+from typing import List
 
 
 class Direction(Enum):
@@ -66,6 +66,7 @@ class SignalCard:
     ladder: List[LadderStep] = field(default_factory=list)
     tradingview_link: str = ""
     low_sample: bool = False
+    strategy_name: str = "matryoshka"
 
     def to_dict(self) -> dict:
         return {
@@ -85,5 +86,6 @@ class SignalCard:
                 {"tp_rr": s.tp_rr, "close_pct": s.close_pct, "move_sl_to_be": s.move_sl_to_be}
                 for s in self.ladder
             ],
+            "strategy_name": self.strategy_name,
             "tradingview_link": self.tradingview_link,
         }

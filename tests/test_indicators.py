@@ -7,8 +7,8 @@ import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from datetime import datetime, timezone
-from models import Candle
-from indicators import ema, atr, candle_wick_ratio, close_position_check
+from core.models import Candle
+from core.indicators import ema, atr, candle_wick_ratio, close_position_check
 
 
 def _make_candle(o, h, l, c, v=100.0, ts=None):

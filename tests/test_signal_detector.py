@@ -6,9 +6,9 @@ import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from datetime import datetime, timezone
-from models import Candle, Direction
-from config import ScannerConfig
-from signal_detector import (
+from core.models import Candle, Direction
+from core.config import ScannerConfig
+from core.signal_detector import (
     check_signal_candle,
     compute_trade_params,
     validate_signal,

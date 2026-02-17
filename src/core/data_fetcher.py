@@ -9,12 +9,11 @@ from typing import List, Optional
 
 import ccxt
 
-from models import Candle
+from core.models import Candle
 
 logger = logging.getLogger(__name__)
 
-# Bybit rate-limit: we add a small sleep between paginated calls.
-_RATE_LIMIT_SLEEP = 0.25  # seconds
+_RATE_LIMIT_SLEEP = 0.25
 
 
 class DataFetcher:
@@ -29,16 +28,11 @@ class DataFetcher:
         })
         self.exchange.load_markets()
 
-    # ------------------------------------------------------------------
-    # Public helpers
-    # ------------------------------------------------------------------
-
     def get_all_usdt_perpetuals(
         self,
         min_volume_24h: float = 0.0,
         exclude: Optional[List[str]] = None,
     ) -> List[str]:
-        """Return ALL USDT perpetual symbols, filtered and sorted by 24h volume."""
         exclude_set = set(exclude or [])
         tickers = self.exchange.fetch_tickers()
         perps = []
@@ -62,7 +56,6 @@ class DataFetcher:
         min_volume_24h: float = 0.0,
         exclude: Optional[List[str]] = None,
     ) -> List[str]:
-        """Return top-N USDT perpetual symbols sorted by 24 h quote volume."""
         all_syms = self.get_all_usdt_perpetuals(min_volume_24h, exclude)
         return all_syms[:top_n]
 
@@ -73,21 +66,25 @@ class DataFetcher:
         limit: int = 200,
         since_ms: Optional[int] = None,
     ) -> List[Candle]:
-        """Fetch OHLCV candles with automatic pagination when limit > 200."""
         ccxt_symbol = self._to_ccxt_symbol(symbol)
+        tf = self._normalize_timeframe(timeframe)
         all_candles: List[Candle] = []
         remaining = limit
         since = since_ms
+
+        if since is None:
+            tf_ms = self._timeframe_to_ms(tf)
+            now_ms = int(datetime.now(tz=timezone.utc).timestamp() * 1000)
+            since = max(0, now_ms - tf_ms * max(limit, 1))
 
         while remaining > 0:
             batch_size = min(remaining, 200)
             retries = 3
             raw = None
+            prev_since = since
             for attempt in range(retries):
                 try:
-                    raw = self.exchange.fetch_ohlcv(
-                        ccxt_symbol, timeframe, since=since, limit=batch_size
-                    )
+                    raw = self.exchange.fetch_ohlcv(ccxt_symbol, tf, since=since, limit=batch_size)
                     break
                 except (ccxt.NetworkError, ccxt.ExchangeNotAvailable) as exc:
                     logger.warning("Retry %d/%d for %s: %s", attempt + 1, retries, symbol, exc)
@@ -98,7 +95,9 @@ class DataFetcher:
             if not raw:
                 break
 
-            for r in raw:
+            raw_sorted = sorted(raw, key=lambda x: x[0])
+
+            for r in raw_sorted:
                 all_candles.append(Candle(
                     timestamp=datetime.fromtimestamp(r[0] / 1000, tz=timezone.utc),
                     open=float(r[1]),
@@ -107,25 +106,29 @@ class DataFetcher:
                     close=float(r[4]),
                     volume=float(r[5]),
                 ))
-            since = raw[-1][0] + 1  # next ms after last candle
-            remaining -= len(raw)
-            if len(raw) < batch_size:
+            since = raw_sorted[-1][0] + 1
+            remaining -= len(raw_sorted)
+
+            if prev_since is not None and since <= prev_since:
                 break
             time.sleep(_RATE_LIMIT_SLEEP)
 
-        return all_candles
+        all_candles.sort(key=lambda c: c.timestamp)
 
-    # ------------------------------------------------------------------
-    # Internal
-    # ------------------------------------------------------------------
+        dedup: List[Candle] = []
+        seen_ts = set()
+        for c in all_candles:
+            if c.timestamp in seen_ts:
+                continue
+            seen_ts.add(c.timestamp)
+            dedup.append(c)
+
+        return dedup
 
     def _to_ccxt_symbol(self, symbol: str) -> str:
-        """Convert 'BTCUSDT' → 'BTC/USDT:USDT' for linear perp."""
-        # Try direct market lookup first (handles edge cases like 1000PEPEUSDT)
         for mkt_sym, mkt in self.exchange.markets.items():
             if mkt.get("id") == symbol and mkt.get("linear"):
                 return mkt_sym
-        # Fallback: strip trailing USDT
         if symbol.endswith("USDT"):
             base = symbol[:-4]
             return f"{base}/USDT:USDT"
@@ -133,5 +136,41 @@ class DataFetcher:
 
     @staticmethod
     def _from_ccxt_symbol(ccxt_symbol: str) -> str:
-        """Convert 'BTC/USDT:USDT' → 'BTCUSDT'."""
         return ccxt_symbol.split("/")[0] + "USDT"
+
+    @staticmethod
+    def _timeframe_to_ms(timeframe: str) -> int:
+        tf = timeframe.strip()
+        unit = tf[-1]
+        value = int(tf[:-1])
+        mult = {
+            "m": 60_000,
+            "h": 3_600_000,
+            "d": 86_400_000,
+            "w": 604_800_000,
+            "M": 2_592_000_000,
+            "D": 86_400_000,
+            "H": 3_600_000,
+        }.get(unit)
+        if mult is None:
+            raise ValueError(f"Unsupported timeframe: {timeframe}")
+        return value * mult
+
+    @staticmethod
+    def _normalize_timeframe(timeframe: str) -> str:
+        tf = timeframe.strip()
+        if len(tf) < 2:
+            return tf
+        unit = tf[-1]
+        value = tf[:-1]
+        if unit in ("H", "h"):
+            return f"{value}h"
+        if unit in ("D", "d"):
+            return f"{value}d"
+        if unit in ("W", "w"):
+            return f"{value}w"
+        if unit == "m":
+            return f"{value}m"
+        if unit == "M":
+            return f"{value}M"
+        return tf

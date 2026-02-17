@@ -16,6 +16,9 @@ python src/main.py --daemon --log-file scanner.log
  
 # С debug-режимом
 python src/main.py --daemon --log-file scanner.log --debug
+
+# Telegram replay bot (команды /replay, /strategies)
+python src/services/control_bot_service.py
 ```
 
 ### Docker (рекомендуется для сервера)
@@ -25,24 +28,64 @@ python src/main.py --daemon --log-file scanner.log --debug
 cp .env.example .env
 # отредактируй .env — впиши токен Telegram-бота и chat_id
 
-# 2. Собери и запусти
+# 2. Собери и запусти (scanner + market-data + signal-engine + notification + analytics + control-bot)
 docker compose up -d
 
-# 3. Посмотри логи
-docker compose logs -f
+# 3. Посмотри логи scanner
+docker compose logs -f scanner
 
-# 4. Остановить
+# 4. Посмотри логи control-bot
+docker compose logs -f control-bot
+
+# 5. Посмотри логи внутренних сервисов
+docker compose logs -f market-data
+docker compose logs -f notification-service
+docker compose logs -f signal-engine
+docker compose logs -f analytics
+
+# 6. Остановить
 docker compose down
 ```
 
 Docker автоматически:
-- перезапускает сканер при падении (`restart: unless-stopped`)
+- перезапускает сканер и бота при падении (`restart: unless-stopped`)
 - сохраняет данные (signals, cache) в папку `data/` через volume
 - читает настройки из `.env`
 
+Схема доставки сигналов в текущей архитектуре:
+
+1. `scanner` запрашивает `signal-engine-service` (`/scan/run`).
+2. `signal-engine-service` получает свечи/символы через `market-data-service`.
+3. Для каждого найденного сигнала публикуется событие `signal.created`.
+4. Независимые подписчики обрабатывают событие:
+   - `notification-service` отправляет карточку в Telegram,
+   - `analytics-service` обновляет агрегированную статистику.
+
+## Telegram Replay Bot
+
+Бот нужен для удобной проверки стратегий на исторических данных прямо из Telegram.
+
+Команды:
+
+- `/start` — справка
+- `/help` — справка
+- `/strategies` — активные стратегии
+- `/replay SYMBOL LOOKBACK` — прогон истории и отправка по 1 последнему сигналу на каждую стратегию
+
+Пример:
+
+```text
+/replay BTCUSDT 1200
+```
+
+Доп. переменные `.env`:
+
+- `TELEGRAM_ALLOWED_USER_IDS=12345,67890` — allowlist пользователей (опционально)
+- `BOT_DEBUG=true` — debug-логи бота
+
 ## Настройки
 
-Все параметры — в `src/config.py` → класс `ScannerConfig`.  
+Все параметры — в `src/core/config.py` → класс `ScannerConfig`.  
 Telegram-токены — в `.env` (см. `.env.example`).
 
 | Параметр | По умолчанию | Описание |
@@ -53,6 +96,7 @@ Telegram-токены — в `.env` (см. `.env.example`).
 | `take_profit.rr_target` | 3.0 | Цель Risk-Reward |
 | `levels_mode` | manual | `manual` — ручные уровни, `auto` — авто (v2) |
 | `levels_manual` | `{...}` | Словарь символ → список ценовых уровней |
+| `enabled_strategies` | `matryoshka, ema_bounce, breakout, engulfing, momentum_break, ema_cross` | Список активных стратегий |
 
 ### Уровни
 
@@ -70,16 +114,40 @@ Telegram-токены — в `.env` (см. `.env.example`).
 - **`atr`** — буфер = ATR × значение
 - **`fixed`** — абсолютное значение в тиках
 
-## Логика стратегии
+## Логика стратегий
 
 Подробное описание простым языком — в **[docs/STRATEGY.md](docs/STRATEGY.md)**.
 
-1. **Контекст D1** — EMA(50) определяет направление: LONG ONLY / SHORT ONLY
-2. **Касание уровня H4** — цена должна быть на заданном уровне поддержки/сопротивления
-3. **Триггерная свеча H4** — свеча отказа с достаточной тенью и правильным закрытием
-4. **Entry / SL / TP** — рассчитываются по экстремумам сигнальной свечи и RR target
-5. **Валидация** — проверка корректности расстояния SL
-6. **Вероятность** — бэктест идентичных сетапов на истории H4
+Сканер поддерживает несколько стратегий одновременно:
+
+1. **Matryoshka** — строгий отскок от уровня (редкие, но более «чистые» сигналы)
+2. **EMA Bounce** — отскок от EMA21 по тренду D1 (частые сигналы)
+3. **Breakout** — пробой уровня с подтверждением объёмом
+4. **Engulfing** — свеча поглощения у уровня
+5. **Momentum Break** — продолжение импульса после пробоя локального диапазона (частые сигналы)
+6. **EMA Cross** — свежий кросс EMA9/EMA21 по тренду D1 (частые сигналы)
+
+### Как получить больше сигналов
+
+Для более частых сигналов оставьте только быстрые стратегии в `src/core/config.py`:
+
+```python
+enabled_strategies = [
+    "ema_bounce",
+    "momentum_break",
+    "ema_cross",
+]
+```
+
+Для более консервативного режима:
+
+```python
+enabled_strategies = [
+    "matryoshka",
+    "breakout",
+    "engulfing",
+]
+```
 
 ## Вывод результатов
 
@@ -106,11 +174,20 @@ pytest tests/ -v
 │   ├── data_fetcher.py         #   Загрузка OHLCV с Bybit (ccxt)
 │   ├── indicators.py           #   EMA, ATR, расчёт теней
 │   ├── levels.py               #   Уровни: ручные + авто (фракталы)
-│   ├── signal_detector.py      #   Пайплайн поиска сетапа (5 шагов)
+│   ├── signal_detector.py      #   Legacy-детектор (Matryoshka)
+│   ├── strategies/             #   Набор стратегий (multi-strategy)
+│   │   ├── base.py
+│   │   ├── matryoshka.py
+│   │   ├── ema_bounce.py
+│   │   ├── breakout.py
+│   │   ├── engulfing.py
+│   │   ├── momentum_break.py
+│   │   └── ema_cross.py
 │   ├── probability.py          #   Бэктест вероятности
 │   ├── output.py               #   Вывод: консоль / JSON / CSV
 │   ├── cache.py                #   Кэш сигналов (дедупликация)
-│   └── telegram_notifier.py    #   Отправка в Telegram
+│   ├── telegram_notifier.py    #   Отправка в Telegram
+│   └── telegram_bot.py         #   Telegram replay bot (/replay)
 ├── tests/                      # Юнит-тесты
 │   ├── test_indicators.py
 │   ├── test_signal_detector.py
@@ -131,6 +208,7 @@ pytest tests/ -v
 ## Документация
 
 - **[docs/STRATEGY.md](docs/STRATEGY.md)** — как работает стратегия (для начинающих)
+- **[docs/THEORY.md](docs/THEORY.md)** — теория по всем стратегиям: логика, слабые места, фильтры
 - **[docs/LEARNING.md](docs/LEARNING.md)** — как научиться торговать через бота
 - **[docs/ROADMAP.md](docs/ROADMAP.md)** — план разработки
 

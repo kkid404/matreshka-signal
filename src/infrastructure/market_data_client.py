@@ -22,12 +22,14 @@ class MarketDataClient:
     def get_all_usdt_perpetuals(
         self,
         min_volume_24h: float = 0.0,
+        min_open_interest: float = 0.0,
         exclude: Optional[List[str]] = None,
     ) -> List[str]:
         payload = {
             "mode": "all",
             "top_n": 0,
             "min_volume_24h": min_volume_24h,
+            "min_open_interest": min_open_interest,
             "exclude": exclude or [],
             "symbols": [],
         }
@@ -40,12 +42,14 @@ class MarketDataClient:
         self,
         top_n: int = 50,
         min_volume_24h: float = 0.0,
+        min_open_interest: float = 0.0,
         exclude: Optional[List[str]] = None,
     ) -> List[str]:
         payload = {
             "mode": "top_n",
             "top_n": top_n,
             "min_volume_24h": min_volume_24h,
+            "min_open_interest": min_open_interest,
             "exclude": exclude or [],
             "symbols": [],
         }

@@ -31,6 +31,7 @@ class DataFetcher:
     def get_all_usdt_perpetuals(
         self,
         min_volume_24h: float = 0.0,
+        min_open_interest: float = 0.0,
         exclude: Optional[List[str]] = None,
     ) -> List[str]:
         exclude_set = set(exclude or [])
@@ -45,19 +46,56 @@ class DataFetcher:
             vol = t.get("quoteVolume") or 0
             if vol < min_volume_24h:
                 continue
+            oi_value = self._extract_open_interest_value(t)
+            if oi_value < min_open_interest:
+                continue
             perps.append((bybit_sym, vol))
         perps.sort(key=lambda x: x[1], reverse=True)
-        logger.info("Found %d USDT perpetual pairs (min_vol=%.0f)", len(perps), min_volume_24h)
+        logger.info(
+            "Found %d USDT perpetual pairs (min_vol=%.0f, min_oi=%.0f)",
+            len(perps),
+            min_volume_24h,
+            min_open_interest,
+        )
         return [s for s, _ in perps]
 
     def get_top_usdt_perpetuals(
         self,
         top_n: int = 50,
         min_volume_24h: float = 0.0,
+        min_open_interest: float = 0.0,
         exclude: Optional[List[str]] = None,
     ) -> List[str]:
-        all_syms = self.get_all_usdt_perpetuals(min_volume_24h, exclude)
+        all_syms = self.get_all_usdt_perpetuals(min_volume_24h, min_open_interest, exclude)
         return all_syms[:top_n]
+
+    @staticmethod
+    def _extract_open_interest_value(ticker: dict) -> float:
+        candidates = [
+            ticker.get("openInterestValue"),
+            ticker.get("openInterest"),
+        ]
+
+        info = ticker.get("info") or {}
+        if isinstance(info, dict):
+            candidates.extend(
+                [
+                    info.get("openInterestValue"),
+                    info.get("openInterest"),
+                    info.get("open_interest"),
+                ]
+            )
+
+        for value in candidates:
+            try:
+                if value is None or value == "":
+                    continue
+                parsed = float(value)
+                if parsed > 0:
+                    return parsed
+            except (TypeError, ValueError):
+                continue
+        return 0.0
 
     def fetch_candles(
         self,

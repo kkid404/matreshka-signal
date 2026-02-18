@@ -113,10 +113,14 @@ class MarketDataHandler(BaseHTTPRequestHandler):
         mode = str(payload.get("mode", "all"))
         top_n = int(payload.get("top_n", 100) or 100)
         min_volume_24h = float(payload.get("min_volume_24h", 0.0) or 0.0)
+        min_open_interest = float(payload.get("min_open_interest", 0.0) or 0.0)
         exclude = payload.get("exclude") or []
         symbols = payload.get("symbols") or []
 
-        cache_key = f"symbols:{mode}:{top_n}:{min_volume_24h}:{','.join(sorted(exclude))}:{','.join(symbols)}"
+        cache_key = (
+            f"symbols:{mode}:{top_n}:{min_volume_24h}:{min_open_interest}:"
+            f"{','.join(sorted(exclude))}:{','.join(symbols)}"
+        )
         cached = self.state.get_cached(cache_key)
         if cached is not None:
             self._json_response(200, {"ok": True, "cached": True, "symbols": cached})
@@ -129,11 +133,13 @@ class MarketDataHandler(BaseHTTPRequestHandler):
             resolved = self.state.fetcher.get_top_usdt_perpetuals(
                 top_n=top_n,
                 min_volume_24h=min_volume_24h,
+                min_open_interest=min_open_interest,
                 exclude=list(exclude),
             )
         else:
             resolved = self.state.fetcher.get_all_usdt_perpetuals(
                 min_volume_24h=min_volume_24h,
+                min_open_interest=min_open_interest,
                 exclude=list(exclude),
             )
 

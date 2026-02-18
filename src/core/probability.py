@@ -92,7 +92,7 @@ def calculate_probability(
         if not check_signal_candle(candle, direction, cfg):
             continue
 
-        entry, sl, tp, _ = compute_trade_params(candle, direction, touched_level, atr_val, cfg)
+        entry, sl, tp, _, _ = compute_trade_params(candle, direction, touched_level, atr_val, cfg)
         if entry == 0 or sl == entry:
             continue
 

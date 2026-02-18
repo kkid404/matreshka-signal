@@ -106,6 +106,11 @@ class TelegramNotifier:
             f"\U0001f4ca <b>RR:</b> 1:{card.rr_target}",
         ]
 
+        if card.entry_min_price > 0 and card.entry_max_price > 0:
+            lines.append(
+                f"\U0001f6d1 <b>\u0414\u0438\u0430\u043f\u0430\u0437\u043e\u043d \u0432\u0445\u043e\u0434\u0430:</b> <code>{card.entry_min_price:.6g} - {card.entry_max_price:.6g}</code>"
+            )
+
         if card.ladder:
             lines.append("")
             lines.append("<b>\U0001fa9c \u041b\u0435\u0441\u0435\u043d\u043a\u0430 TP:</b>")

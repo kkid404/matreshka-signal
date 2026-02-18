@@ -123,11 +123,21 @@ class SignalEngineHandler(BaseHTTPRequestHandler):
 
     def _json_response(self, status: int, payload: dict) -> None:
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-        self.send_response(status)
-        self.send_header("Content-Type", "application/json; charset=utf-8")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
+        try:
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        except Exception as exc:
+            if self._is_client_disconnect_error(exc):
+                logger.debug("Client disconnected before response was sent: %s", exc)
+                return
+            raise
+
+    @staticmethod
+    def _is_client_disconnect_error(exc: Exception) -> bool:
+        return isinstance(exc, (BrokenPipeError, ConnectionResetError))
 
     def log_message(self, format: str, *args) -> None:
         logger.debug("http: " + format, *args)
@@ -143,7 +153,25 @@ def main() -> None:
     strategies = build_enabled_strategies(cfg)
     data_dir = os.getenv("DATA_DIR", "data")
     os.makedirs(data_dir, exist_ok=True)
-    cache = SignalCache(os.path.join(data_dir, "signal_cache.json"))
+
+    redis_url = os.getenv("REDIS_URL", "")
+    redis_key_prefix = os.getenv("SIGNAL_CACHE_REDIS_KEY_PREFIX", "signal_cache")
+    redis_ttl_raw = os.getenv("SIGNAL_CACHE_REDIS_TTL_SECONDS", str(7 * 24 * 60 * 60))
+    try:
+        redis_ttl_seconds = int(redis_ttl_raw)
+    except ValueError:
+        logger.warning(
+            "Invalid SIGNAL_CACHE_REDIS_TTL_SECONDS='%s'; using default=604800",
+            redis_ttl_raw,
+        )
+        redis_ttl_seconds = 7 * 24 * 60 * 60
+
+    cache = SignalCache(
+        cache_file=os.path.join(data_dir, "signal_cache.json"),
+        redis_url=redis_url,
+        redis_key_prefix=redis_key_prefix,
+        redis_ttl_seconds=redis_ttl_seconds,
+    )
 
     subscriber_urls = [
         os.getenv("NOTIFICATION_SERVICE_URL", "http://127.0.0.1:8081"),

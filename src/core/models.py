@@ -67,6 +67,32 @@ class SignalCard:
     tradingview_link: str = ""
     low_sample: bool = False
     strategy_name: str = "matryoshka"
+    entry_min_price: float = 0.0
+    entry_max_price: float = 0.0
+
+    def __post_init__(self) -> None:
+        if self.entry_price <= 0:
+            return
+
+        if self.entry_min_price > 0 and self.entry_max_price > 0:
+            if self.entry_min_price > self.entry_max_price:
+                self.entry_min_price, self.entry_max_price = self.entry_max_price, self.entry_min_price
+            return
+
+        risk = abs(self.entry_price - self.stop_loss)
+        if risk <= 0:
+            self.entry_min_price = self.entry_price
+            self.entry_max_price = self.entry_price
+            return
+
+        # Acceptable entry zone: no more than 25% of initial stop distance from planned entry.
+        zone_risk_part = risk * 0.25
+        if self.direction == Direction.LONG:
+            self.entry_min_price = max(self.entry_price - zone_risk_part, 0.0)
+            self.entry_max_price = self.entry_price
+        else:
+            self.entry_min_price = self.entry_price
+            self.entry_max_price = self.entry_price + zone_risk_part
 
     def to_dict(self) -> dict:
         return {
@@ -76,6 +102,8 @@ class SignalCard:
             "signal_candle_time": self.signal_candle_time.isoformat(),
             "level_price": self.level_price,
             "entry_price": round(self.entry_price, 8),
+            "entry_min_price": round(self.entry_min_price, 8),
+            "entry_max_price": round(self.entry_max_price, 8),
             "stop_loss": round(self.stop_loss, 8),
             "take_profit": round(self.take_profit, 8),
             "rr_target": self.rr_target,

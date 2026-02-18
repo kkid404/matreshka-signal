@@ -40,4 +40,6 @@ def signal_card_from_dict(data: Dict[str, Any]) -> SignalCard:
         tradingview_link=str(data.get("tradingview_link", "")),
         low_sample=bool(data.get("low_sample", False)),
         strategy_name=str(data.get("strategy_name", "matryoshka")),
+        entry_min_price=float(data.get("entry_min_price", 0.0)),
+        entry_max_price=float(data.get("entry_max_price", 0.0)),
     )

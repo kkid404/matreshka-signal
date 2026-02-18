@@ -35,6 +35,9 @@ def print_signal_card(card: SignalCard) -> None:
         f"TV Link   : {card.tradingview_link}"
     )
 
+    if card.entry_min_price > 0 and card.entry_max_price > 0:
+        body += f"\nEntry Zone: {card.entry_min_price:.6g} - {card.entry_max_price:.6g}"
+
     if card.ladder:
         body += "\nLadder:"
         for step in card.ladder:
@@ -86,7 +89,7 @@ def save_signals_json(cards: List[SignalCard], path: str) -> None:
 
 _CSV_FIELDS = [
     "symbol", "direction", "timeframe", "signal_candle_time",
-    "level_price", "entry_price", "stop_loss", "take_profit",
+    "level_price", "entry_price", "entry_min_price", "entry_max_price", "stop_loss", "take_profit",
     "rr_target", "probability_percent", "sample_size_N",
     "tradingview_link",
 ]

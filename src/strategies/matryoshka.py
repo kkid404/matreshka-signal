@@ -8,9 +8,9 @@ from typing import List, Optional
 
 from core.config import ScannerConfig
 from core.ladder import normalize_ladder_steps, resolve_rr_target
+from core.levels import level_touched, nearest_level, resolve_levels
 from core.models import Candle, Direction, SignalCard
 from core.indicators import ema, atr as calc_atr, candle_wick_ratio, close_position_check
-from core.levels import get_manual_levels, level_touched, nearest_level, detect_swing_highs_lows, cluster_levels
 from core.signal_detector import validate_signal
 from strategies.base import BaseStrategy
 
@@ -99,10 +99,16 @@ class MatryoshkaStrategy(BaseStrategy):
 
     @staticmethod
     def _levels(symbol: str, h4_candles: List[Candle], cfg: ScannerConfig) -> List[float]:
-        if cfg.levels_mode == "manual":
-            return get_manual_levels(cfg.levels_manual, symbol)
-        raw = detect_swing_highs_lows(h4_candles, order=5)
-        return cluster_levels(raw, tolerance_pct=0.5)
+        if not h4_candles:
+            return []
+        ref_idx = -2 if len(h4_candles) >= 2 else -1
+        return resolve_levels(
+            cfg.levels_manual,
+            symbol,
+            h4_candles,
+            cfg,
+            reference_price=h4_candles[ref_idx].close,
+        )
 
     @staticmethod
     def _atr(h4_candles: List[Candle], index: int) -> float:

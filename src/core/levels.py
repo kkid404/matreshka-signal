@@ -68,3 +68,52 @@ def cluster_levels(levels: List[float], tolerance_pct: float = 0.5) -> List[floa
         else:
             clusters.append([lv])
     return [sum(c) / len(c) for c in clusters]
+
+
+def select_nearest_levels(levels: List[float], reference_price: float, nearest_count: int) -> List[float]:
+    if not levels:
+        return []
+    if nearest_count <= 0:
+        return sorted(levels)
+    if reference_price <= 0:
+        return sorted(levels)[:nearest_count]
+
+    nearest = sorted(levels, key=lambda lv: abs(lv - reference_price))[:nearest_count]
+    return sorted(nearest)
+
+
+def get_auto_levels(
+    candles: List[Candle],
+    swing_order: int,
+    cluster_tolerance_pct: float,
+    nearest_count: int,
+    reference_price: Optional[float] = None,
+) -> List[float]:
+    if not candles:
+        return []
+
+    raw = detect_swing_highs_lows(candles, order=max(1, int(swing_order)))
+    clustered = cluster_levels(raw, tolerance_pct=max(0.01, float(cluster_tolerance_pct)))
+    if reference_price is None:
+        reference_price = candles[-1].close if candles else 0.0
+    return select_nearest_levels(clustered, reference_price=reference_price, nearest_count=int(nearest_count))
+
+
+def resolve_levels(
+    levels_dict: dict,
+    symbol: str,
+    candles: List[Candle],
+    cfg,
+    reference_price: Optional[float] = None,
+) -> List[float]:
+    if cfg.levels_mode == "manual":
+        return get_manual_levels(levels_dict, symbol)
+
+    auto_cfg = cfg.auto_levels
+    return get_auto_levels(
+        candles,
+        swing_order=auto_cfg.swing_order,
+        cluster_tolerance_pct=auto_cfg.cluster_tolerance_pct,
+        nearest_count=auto_cfg.nearest_count,
+        reference_price=reference_price,
+    )

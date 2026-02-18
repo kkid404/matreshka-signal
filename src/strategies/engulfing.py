@@ -18,7 +18,7 @@ from typing import List, Optional
 from core.config import ScannerConfig
 from core.models import Candle, Direction, SignalCard
 from core.indicators import ema, atr as calc_atr
-from core.levels import detect_swing_highs_lows, cluster_levels
+from core.levels import resolve_levels
 from strategies.base import BaseStrategy
 
 logger = logging.getLogger(__name__)
@@ -86,8 +86,13 @@ class EngulfingStrategy(BaseStrategy):
             return None
 
         # --- level proximity ---
-        raw = detect_swing_highs_lows(h4_candles, order=5)
-        levels = cluster_levels(raw, tolerance_pct=0.5)
+        levels = resolve_levels(
+            cfg.levels_manual,
+            symbol,
+            h4_candles,
+            cfg,
+            reference_price=eng.close,
+        )
         if not levels:
             logger.debug("[%s] %s: no levels", self.name, symbol)
             return None

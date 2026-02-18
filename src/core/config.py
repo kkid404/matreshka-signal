@@ -82,6 +82,13 @@ class SetupConfig:
 
 
 @dataclass
+class AutoLevelsConfig:
+    swing_order: int = 5
+    cluster_tolerance_pct: float = 0.5
+    nearest_count: int = 8
+
+
+@dataclass
 class TelegramConfig:
     enabled: bool = False
     bot_token: str = ""
@@ -105,6 +112,7 @@ class ScannerConfig:
     probability: ProbabilityConfig = field(default_factory=ProbabilityConfig)
 
     levels_mode: Literal["manual", "auto"] = "auto"
+    auto_levels: AutoLevelsConfig = field(default_factory=AutoLevelsConfig)
     levels_manual: Dict[str, List[float]] = field(default_factory=lambda: {
         "BTCUSDT": [43000, 41650],
         "SOLUSDT": [90, 85],

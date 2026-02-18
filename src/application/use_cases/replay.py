@@ -5,7 +5,7 @@ from typing import Dict, List
 
 from core.config import ScannerConfig
 from core.data_fetcher import DataFetcher
-from core.levels import cluster_levels, detect_swing_highs_lows, get_manual_levels
+from core.levels import resolve_levels
 from core.models import SignalCard
 from core.probability import calculate_probability
 from strategies.base import BaseStrategy
@@ -98,7 +98,13 @@ def replay_symbol_history(
 
 
 def _get_levels(symbol: str, h4_candles, cfg: ScannerConfig) -> List[float]:
-    if cfg.levels_mode == "manual":
-        return get_manual_levels(cfg.levels_manual, symbol)
-    raw = detect_swing_highs_lows(h4_candles, order=5)
-    return cluster_levels(raw, tolerance_pct=0.5)
+    if not h4_candles:
+        return []
+    ref_idx = -2 if len(h4_candles) >= 2 else -1
+    return resolve_levels(
+        cfg.levels_manual,
+        symbol,
+        h4_candles,
+        cfg,
+        reference_price=h4_candles[ref_idx].close,
+    )

@@ -124,14 +124,17 @@ Telegram-токены — в `.env` (см. `.env.example`).
 | `validation.max_tp_atr_multiple` | 20.0 | ATR-фильтр дистанции тейк-профита |
 | `validation.max_candle_gap_factor` | 2.5 | Порог пропусков свечей (gap) для отбраковки символа |
 | `validation.max_zero_volume_share` | 0.35 | Порог неликвидности (доля свечей с нулевым объёмом) |
-| `levels_mode` | manual | `manual` — ручные уровни, `auto` — авто (v2) |
+| `levels_mode` | auto | `manual` — ручные уровни, `auto` — авто-уровни (swing + cluster + nearest) |
+| `auto_levels.swing_order` | 5 | Порядок фрактала для поиска swing highs/lows |
+| `auto_levels.cluster_tolerance_pct` | 0.5 | Допуск (%) для кластеризации близких уровней |
+| `auto_levels.nearest_count` | 8 | Кол-во ближайших авто-уровней к reference price |
 | `levels_manual` | `{...}` | Словарь символ → список ценовых уровней |
 | `enabled_strategies` | `matryoshka, ema_bounce, breakout, engulfing, momentum_break, ema_cross` | Список активных стратегий |
 
 ### Уровни
 
-**Ручной режим (v1):** задайте ключевые уровни поддержки/сопротивления в `levels_manual`.  
-**Авто-режим (v2):** установите `levels_mode = "auto"` — фрактальные свинги + кластеризация.
+**Ручной режим:** задайте ключевые уровни поддержки/сопротивления в `levels_manual`.  
+**Авто-режим:** `levels_mode = "auto"` — фрактальные swing highs/lows + кластеризация + выбор N ближайших уровней.
 
 ### Режим касания уровня
 
@@ -218,6 +221,7 @@ pytest tests/ -v
 │   ├── test_indicators.py
 │   ├── test_signal_detector.py
 │   ├── test_probability.py
+│   ├── test_auto_levels.py
 │   ├── test_risk_profile.py
 │   ├── test_position_sizing.py
 │   ├── test_control_bot_risk_commands.py
@@ -253,4 +257,4 @@ pytest tests/ -v
 - Интеграционный тест на 1–2 реальных монетах с ручной сверкой
 - Персистентное хранилище сигналов (`signal.created`) в PostgreSQL
 - История запусков scan/replay в dashboard
-- Авто-уровни (фракталы + кластеризация)
+- Экспорт таблиц/срезов в CSV/JSON из dashboard

@@ -57,6 +57,14 @@ class TakeProfitConfig:
 class ValidationConfig:
     min_sl_distance_pct: float = 0.05
     max_sl_distance_pct: float = 10.0
+    max_tp_distance_pct: float = 30.0
+    min_sl_atr_multiple: float = 0.1
+    max_sl_atr_multiple: float = 8.0
+    max_tp_atr_multiple: float = 20.0
+    min_d1_candles: int = 50
+    min_h4_candles: int = 30
+    max_candle_gap_factor: float = 2.5
+    max_zero_volume_share: float = 0.35
 
 
 @dataclass

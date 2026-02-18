@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import time
+from datetime import timedelta
 from typing import List
 
 from core.cache import SignalCache
@@ -17,6 +18,53 @@ logger = logging.getLogger("matryoshka")
 _SYMBOL_THROTTLE = 0.35
 
 
+def _timeframe_to_timedelta(timeframe: str) -> timedelta:
+    tf = (timeframe or "").strip()
+    if len(tf) < 2:
+        return timedelta(0)
+    unit = tf[-1]
+    try:
+        value = int(tf[:-1])
+    except ValueError:
+        return timedelta(0)
+
+    if unit in ("m", "M"):
+        return timedelta(minutes=value)
+    if unit in ("h", "H"):
+        return timedelta(hours=value)
+    if unit in ("d", "D"):
+        return timedelta(days=value)
+    if unit in ("w", "W"):
+        return timedelta(weeks=value)
+    return timedelta(0)
+
+
+def _has_invalid_candle_sequence(candles, timeframe: str, max_gap_factor: float) -> bool:
+    if len(candles) < 2:
+        return False
+
+    expected_step = _timeframe_to_timedelta(timeframe)
+    if expected_step <= timedelta(0):
+        return False
+
+    max_gap = expected_step * max(max_gap_factor, 1.0)
+    prev_ts = candles[0].timestamp
+    for candle in candles[1:]:
+        if candle.timestamp <= prev_ts:
+            return True
+        if candle.timestamp - prev_ts > max_gap:
+            return True
+        prev_ts = candle.timestamp
+    return False
+
+
+def _zero_volume_share(candles) -> float:
+    if not candles:
+        return 1.0
+    zero_count = sum(1 for c in candles if c.volume <= 0)
+    return zero_count / len(candles)
+
+
 def resolve_symbols(cfg: ScannerConfig, fetcher: DataFetcher) -> List[str]:
     """Resolve symbols according to symbols_mode and filters."""
     flt = cfg.symbol_filter
@@ -28,11 +76,13 @@ def resolve_symbols(cfg: ScannerConfig, fetcher: DataFetcher) -> List[str]:
         return fetcher.get_top_usdt_perpetuals(
             top_n=cfg.top_n,
             min_volume_24h=flt.min_volume_24h,
+            min_open_interest=flt.min_open_interest,
             exclude=flt.exclude,
         )
 
     return fetcher.get_all_usdt_perpetuals(
         min_volume_24h=flt.min_volume_24h,
+        min_open_interest=flt.min_open_interest,
         exclude=flt.exclude,
     )
 
@@ -54,12 +104,47 @@ def run_scan(
         logger.debug("Scanning %s ...", symbol)
         try:
             d1_candles = fetcher.fetch_candles(symbol, cfg.context.timeframe, limit=cfg.context.lookback_bars)
+            if len(d1_candles) < cfg.validation.min_d1_candles:
+                logger.warning(
+                    "%s: not enough D1 data (%d candles, need >= %d)",
+                    symbol,
+                    len(d1_candles),
+                    cfg.validation.min_d1_candles,
+                )
+                continue
 
             h4_limit = max(cfg.setup.lookback_bars, cfg.probability.lookback_bars)
             h4_candles = fetcher.fetch_candles(symbol, cfg.setup.timeframe, limit=h4_limit)
 
-            if len(h4_candles) < 30:
-                logger.warning("%s: not enough H4 data (%d candles)", symbol, len(h4_candles))
+            if len(h4_candles) < cfg.validation.min_h4_candles:
+                logger.warning(
+                    "%s: not enough H4 data (%d candles, need >= %d)",
+                    symbol,
+                    len(h4_candles),
+                    cfg.validation.min_h4_candles,
+                )
+                continue
+
+            if _has_invalid_candle_sequence(
+                h4_candles,
+                timeframe=cfg.setup.timeframe,
+                max_gap_factor=cfg.validation.max_candle_gap_factor,
+            ):
+                logger.warning(
+                    "%s: skipped due to candle gaps/time-order issues on %s",
+                    symbol,
+                    cfg.setup.timeframe,
+                )
+                continue
+
+            zero_volume_share = _zero_volume_share(h4_candles)
+            if zero_volume_share > cfg.validation.max_zero_volume_share:
+                logger.warning(
+                    "%s: skipped as illiquid (zero-volume share %.2f > %.2f)",
+                    symbol,
+                    zero_volume_share,
+                    cfg.validation.max_zero_volume_share,
+                )
                 continue
 
             found_any = False

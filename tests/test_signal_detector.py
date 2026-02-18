@@ -6,7 +6,7 @@ import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from datetime import datetime, timezone
-from core.models import Candle, Direction
+from core.models import Candle, Direction, LadderStep
 from core.config import ScannerConfig
 from core.signal_detector import (
     check_signal_candle,
@@ -36,7 +36,7 @@ class TestTradeParams:
         cfg.take_profit.rr_target = 3.0
 
         signal = _candle(o=100, h=102, l=90, c=101)
-        entry, sl, tp, _ = compute_trade_params(
+        entry, sl, tp, _, rr_target = compute_trade_params(
             signal, Direction.LONG, level=95.0, atr_value=5.0, cfg=cfg,
         )
         # entry = close = 101
@@ -47,6 +47,7 @@ class TestTradeParams:
         # risk = 101 - 89.91 ≈ 11.09, tp = 101 + 3*11.09 ≈ 134.27
         risk = entry - sl
         assert abs(tp - (entry + 3.0 * risk)) < 0.01
+        assert rr_target == 3.0
 
     def test_short_params(self):
         cfg = ScannerConfig()
@@ -55,7 +56,7 @@ class TestTradeParams:
         cfg.take_profit.rr_target = 3.0
 
         signal = _candle(o=100, h=110, l=99, c=99)
-        entry, sl, tp, _ = compute_trade_params(
+        entry, sl, tp, _, rr_target = compute_trade_params(
             signal, Direction.SHORT, level=105.0, atr_value=5.0, cfg=cfg,
         )
         assert entry == 99.0
@@ -64,6 +65,36 @@ class TestTradeParams:
         assert abs(sl - (110 + 99 * 0.001)) < 0.01
         risk = sl - entry
         assert abs(tp - (entry - 3.0 * risk)) < 0.01
+        assert rr_target == 3.0
+
+    def test_ladder_steps_are_normalized_and_rr_target_comes_from_last_step(self):
+        cfg = ScannerConfig()
+        cfg.stop_loss.buffer_mode = "fixed"
+        cfg.stop_loss.buffer_value = 1.0
+        cfg.take_profit.rr_target = 2.0
+        cfg.take_profit.ladder_enabled = True
+        # Includes invalid step and sum > 100% to test normalization.
+        cfg.take_profit.ladder_steps = [
+            LadderStep(tp_rr=2.5, close_pct=0.5, move_sl_to_be=False),
+            LadderStep(tp_rr=1.0, close_pct=0.6, move_sl_to_be=True),
+            LadderStep(tp_rr=-1.0, close_pct=0.3, move_sl_to_be=False),
+        ]
+
+        signal = _candle(o=100, h=104, l=95, c=100)
+        entry, sl, tp, ladder, rr_target = compute_trade_params(
+            signal, Direction.LONG, level=95.0, atr_value=0.0, cfg=cfg,
+        )
+
+        assert rr_target == 2.5
+        assert len(ladder) == 2
+        assert ladder[0].tp_rr == 1.0
+        assert ladder[0].move_sl_to_be is True
+        # 60% from first step + capped 40% from second step.
+        assert abs(ladder[0].close_pct - 0.6) < 1e-9
+        assert abs(ladder[1].close_pct - 0.4) < 1e-9
+
+        risk = entry - sl
+        assert abs(tp - (entry + rr_target * risk)) < 1e-9
 
 
 # ---------------------------------------------------------------------------
@@ -105,6 +136,18 @@ class TestValidation:
         cfg.validation.min_sl_distance_pct = 0.05
         cfg.validation.max_sl_distance_pct = 10.0
         assert validate_signal(100, 95, 115, cfg) is True
+
+    def test_tp_too_far_is_rejected(self):
+        cfg = ScannerConfig()
+        cfg.validation.max_tp_distance_pct = 10.0
+        # TP distance = 20% -> reject
+        assert validate_signal(100, 95, 120, cfg) is False
+
+    def test_sl_atr_filter_rejects_too_tight_stop(self):
+        cfg = ScannerConfig()
+        cfg.validation.min_sl_atr_multiple = 1.0
+        # SL distance = 1, ATR = 2 => 0.5 ATR (too tight)
+        assert validate_signal(100, 99, 105, cfg, atr_value=2.0) is False
 
 
 # ---------------------------------------------------------------------------

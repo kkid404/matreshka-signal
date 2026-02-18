@@ -7,9 +7,11 @@ import math
 from typing import List, Optional
 
 from core.config import ScannerConfig
+from core.ladder import normalize_ladder_steps, resolve_rr_target
 from core.models import Candle, Direction, SignalCard
 from core.indicators import ema, atr as calc_atr, candle_wick_ratio, close_position_check
 from core.levels import get_manual_levels, level_touched, nearest_level, detect_swing_highs_lows, cluster_levels
+from core.signal_detector import validate_signal
 from strategies.base import BaseStrategy
 
 logger = logging.getLogger(__name__)
@@ -56,13 +58,11 @@ class MatryoshkaStrategy(BaseStrategy):
             return None
 
         # Trade params
-        entry, sl, tp, ladder = self._trade_params(candle, direction, touched, atr_val, cfg)
+        entry, sl, tp, ladder, rr_target = self._trade_params(candle, direction, touched, atr_val, cfg)
 
         # Validate
-        if entry == 0:
-            return None
-        sl_pct = abs(entry - sl) / entry * 100.0
-        if sl_pct < cfg.validation.min_sl_distance_pct or sl_pct > cfg.validation.max_sl_distance_pct:
+        if not validate_signal(entry, sl, tp, cfg, atr_value=atr_val):
+            sl_pct = abs(entry - sl) / entry * 100.0 if entry > 0 else 0.0
             logger.debug("[%s] %s: validation FAIL SL=%.3f%%", self.name, symbol, sl_pct)
             return None
 
@@ -78,7 +78,7 @@ class MatryoshkaStrategy(BaseStrategy):
             entry_price=entry,
             stop_loss=sl,
             take_profit=tp,
-            rr_target=cfg.take_profit.rr_target,
+            rr_target=rr_target,
             probability_percent=0.0,
             sample_size_n=0,
             ladder=ladder,
@@ -152,16 +152,18 @@ class MatryoshkaStrategy(BaseStrategy):
         else:
             buf = val
 
+        ladder = []
+        if cfg.take_profit.ladder_enabled and cfg.take_profit.ladder_steps:
+            ladder = normalize_ladder_steps(cfg.take_profit.ladder_steps)
+        rr_target = resolve_rr_target(cfg.take_profit.rr_target, ladder)
+
         if direction == Direction.LONG:
             sl = candle.low - buf
             risk = entry - sl
-            tp = entry + cfg.take_profit.rr_target * risk
+            tp = entry + rr_target * risk
         else:
             sl = candle.high + buf
             risk = sl - entry
-            tp = entry - cfg.take_profit.rr_target * risk
+            tp = entry - rr_target * risk
 
-        ladder = []
-        if cfg.take_profit.ladder_enabled and cfg.take_profit.ladder_steps:
-            ladder = cfg.take_profit.ladder_steps
-        return entry, sl, tp, ladder
+        return entry, sl, tp, ladder, rr_target

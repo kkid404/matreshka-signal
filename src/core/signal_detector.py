@@ -7,6 +7,7 @@ import math
 from typing import List, Optional, Tuple
 
 from core.config import ScannerConfig
+from core.ladder import normalize_ladder_steps, resolve_rr_target
 from core.models import Candle, Direction, LadderStep, SignalCard
 from core.indicators import ema, atr as calc_atr, candle_wick_ratio, close_position_check
 from core.levels import get_manual_levels, level_touched, nearest_level, detect_swing_highs_lows, cluster_levels
@@ -71,34 +72,58 @@ def compute_trade_params(
     level: float,
     atr_value: float,
     cfg: ScannerConfig,
-) -> Tuple[float, float, float, List[LadderStep]]:
+) -> Tuple[float, float, float, List[LadderStep], float]:
     entry = signal_candle.close
     buf = _compute_buffer(entry, atr_value, cfg)
+
+    ladder: List[LadderStep] = []
+    if cfg.take_profit.ladder_enabled and cfg.take_profit.ladder_steps:
+        ladder = normalize_ladder_steps(cfg.take_profit.ladder_steps)
+
+    rr_target = resolve_rr_target(cfg.take_profit.rr_target, ladder)
 
     if direction == Direction.LONG:
         sl = signal_candle.low - buf
         risk = entry - sl
-        tp = entry + cfg.take_profit.rr_target * risk
+        tp = entry + rr_target * risk
     else:
         sl = signal_candle.high + buf
         risk = sl - entry
-        tp = entry - cfg.take_profit.rr_target * risk
+        tp = entry - rr_target * risk
 
-    ladder: List[LadderStep] = []
-    if cfg.take_profit.ladder_enabled and cfg.take_profit.ladder_steps:
-        ladder = cfg.take_profit.ladder_steps
-
-    return entry, sl, tp, ladder
+    return entry, sl, tp, ladder, rr_target
 
 
-def validate_signal(entry: float, sl: float, tp: float, cfg: ScannerConfig) -> bool:
-    if entry == 0:
+def validate_signal(entry: float, sl: float, tp: float, cfg: ScannerConfig, atr_value: float = 0.0) -> bool:
+    if entry <= 0:
         return False
+
+    # Directional realism for TP.
+    if tp == entry:
+        return False
+
     sl_dist_pct = abs(entry - sl) / entry * 100.0
     if sl_dist_pct < cfg.validation.min_sl_distance_pct:
         return False
     if sl_dist_pct > cfg.validation.max_sl_distance_pct:
         return False
+
+    tp_dist_pct = abs(tp - entry) / entry * 100.0
+    if tp_dist_pct > cfg.validation.max_tp_distance_pct:
+        return False
+
+    # Optional ATR-based realism filters.
+    if atr_value > 0:
+        sl_atr = abs(entry - sl) / atr_value
+        if sl_atr < cfg.validation.min_sl_atr_multiple:
+            return False
+        if sl_atr > cfg.validation.max_sl_atr_multiple:
+            return False
+
+        tp_atr = abs(tp - entry) / atr_value
+        if tp_atr > cfg.validation.max_tp_atr_multiple:
+            return False
+
     return True
 
 
@@ -175,10 +200,10 @@ def scan_symbol(
         return None
     logger.debug("%s: trigger OK", symbol)
 
-    entry, sl, tp, ladder = compute_trade_params(signal_candle, direction, touched_level, atr_val, cfg)
+    entry, sl, tp, ladder, rr_target = compute_trade_params(signal_candle, direction, touched_level, atr_val, cfg)
 
     sl_dist = abs(entry - sl) / entry * 100.0
-    if not validate_signal(entry, sl, tp, cfg):
+    if not validate_signal(entry, sl, tp, cfg, atr_value=atr_val):
         logger.debug(
             "%s: validation FAIL — SL dist=%.3f%% (need %.3f–%.3f%%)",
             symbol,
@@ -201,7 +226,7 @@ def scan_symbol(
         entry_price=entry,
         stop_loss=sl,
         take_profit=tp,
-        rr_target=cfg.take_profit.rr_target,
+        rr_target=rr_target,
         probability_percent=0.0,
         sample_size_n=0,
         ladder=ladder,
